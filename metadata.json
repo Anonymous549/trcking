@@ -1,0 +1,6 @@
+{
+  "name": "LIFE OS 365",
+  "description": "Offline-first, privacy-focused personal life management and analytics system for habits, fitness, study, finance, goals, and journaling.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

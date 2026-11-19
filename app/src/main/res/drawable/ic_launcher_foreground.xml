@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer compass ring within 66dp safe zone (coords 29..79) -->
+    <path
+        android:fillColor="#F7F4EE"
+        android:fillType="evenOdd"
+        android:pathData="M54,29 A25,25 0 1,0 54,79 A25,25 0 1,0 54,29 Z M54,34 A20,20 0 1,1 54,74 A20,20 0 1,1 54,34 Z" />
+    <!-- Inner 4-point compass star -->
+    <path
+        android:fillColor="#F7F4EE"
+        android:pathData="M54,37 L58.5,49.5 L71,54 L58.5,58.5 L54,71 L49.5,58.5 L37,54 L49.5,49.5 Z" />
+    <!-- Warm amber center seed dot -->
+    <path
+        android:fillColor="#C89B3C"
+        android:pathData="M54,51 A3,3 0 1,0 54,57 A3,3 0 1,0 54,51 Z" />
+</vector>

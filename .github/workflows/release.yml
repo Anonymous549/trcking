@@ -1,0 +1,175 @@
+name: Release Cycle
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+  workflow_dispatch:
+    inputs:
+      version_tag:
+        description: "Semantic version tag (e.g., v1.0.0 or v1.1.0-rc.1)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as GitHub pre-release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Verify, Build & Publish GitHub Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release metadata
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG_NAME="${{ inputs.version_tag }}"
+            MANUAL_PRE="${{ inputs.prerelease }}"
+          else
+            TAG_NAME="${GITHUB_REF_NAME}"
+            MANUAL_PRE="false"
+          fi
+
+          if [[ ! "$TAG_NAME" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "ERROR: Tag '$TAG_NAME' does not match SemVer (vMAJOR.MINOR.PATCH[-prerelease])."
+            exit 1
+          fi
+
+          MAJOR="${BASH_REMATCH[1]}"
+          MINOR="${BASH_REMATCH[2]}"
+          PATCH="${BASH_REMATCH[3]}"
+          SUFFIX="${BASH_REMATCH[4]}"
+          VERSION_NAME="${TAG_NAME#v}"
+          VERSION_CODE=$(( MAJOR * 10000 + MINOR * 100 + PATCH ))
+          if [ "$VERSION_CODE" -lt 1 ]; then
+            VERSION_CODE=1
+          fi
+
+          IS_PRERELEASE="false"
+          if [ "$MANUAL_PRE" = "true" ] || [ -n "$SUFFIX" ]; then
+            IS_PRERELEASE="true"
+          fi
+
+          echo "tag_name=$TAG_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_name=$VERSION_NAME" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VERSION_CODE" >> "$GITHUB_OUTPUT"
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      - name: Verify offline-first manifest policy
+        run: |
+          if grep -q "android.permission.INTERNET" app/src/main/AndroidManifest.xml; then
+            echo "ERROR: android.permission.INTERNET is prohibited in LIFE OS 365."
+            exit 1
+          fi
+          if ! grep -q 'android:allowBackup="false"' app/src/main/AndroidManifest.xml; then
+            echo "ERROR: android:allowBackup=\"false\" must remain set in AndroidManifest.xml."
+            exit 1
+          fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.3.1"
+
+      - name: Ensure debug keystore exists for test verification
+        run: |
+          if [ ! -f debug.keystore ] && [ -f debug.keystore.base64 ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+          fi
+
+      - name: Run release QA gate (Unit Tests & Lint)
+        run: |
+          gradle :app:testDebugUnitTest :app:lintDebug \
+            -PlifeOsVersionName="${{ steps.meta.outputs.version_name }}" \
+            -PlifeOsVersionCode="${{ steps.meta.outputs.version_code }}" \
+            --stacktrace
+
+      - name: Build release APK & AAB (or debug fallback if signing secrets unset)
+        id: build
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          mkdir -p dist
+          VERSION_NAME="${{ steps.meta.outputs.version_name }}"
+          VERSION_CODE="${{ steps.meta.outputs.version_code }}"
+          TAG_NAME="${{ steps.meta.outputs.tag_name }}"
+
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/my-upload-key.jks"
+            export KEYSTORE_PATH="$RUNNER_TEMP/my-upload-key.jks"
+
+            gradle :app:assembleRelease :app:bundleRelease \
+              -PlifeOsVersionName="$VERSION_NAME" \
+              -PlifeOsVersionCode="$VERSION_CODE" \
+              --stacktrace
+
+            cp app/build/outputs/apk/release/app-release.apk "dist/LIFE-OS-365-${TAG_NAME}-release.apk"
+            cp app/build/outputs/bundle/release/app-release.aab "dist/LIFE-OS-365-${TAG_NAME}-release.aab"
+            rm -f "$RUNNER_TEMP/my-upload-key.jks"
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Signing secrets (KEYSTORE_BASE64, STORE_PASSWORD, KEY_PASSWORD) not configured; building debug APK artifact."
+            gradle :app:assembleDebug \
+              -PlifeOsVersionName="$VERSION_NAME" \
+              -PlifeOsVersionCode="$VERSION_CODE" \
+              --stacktrace
+
+            cp app/build/outputs/apk/debug/app-debug.apk "dist/LIFE-OS-365-${TAG_NAME}-debug.apk"
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Prepare release notes body
+        id: notes
+        run: |
+          {
+            echo "## LIFE OS 365 ${{ steps.meta.outputs.tag_name }}"
+            echo ""
+            echo "- **Version Name:** \`${{ steps.meta.outputs.version_name }}\`"
+            echo "- **Version Code:** \`${{ steps.meta.outputs.version_code }}\`"
+            echo "- **Offline-First Verified:** Zero \`INTERNET\` permission, \`allowBackup=false\`, all unit & Robolectric tests passed."
+            if [ "${{ steps.build.outputs.signed }}" = "false" ]; then
+              echo "- **Artifact Notice:** Repository release signing secrets are not yet configured, so a debug-signed APK was attached. Configure \`KEYSTORE_BASE64\`, \`STORE_PASSWORD\`, and \`KEY_PASSWORD\` in GitHub Secrets for signed release APK & AAB builds."
+            fi
+            echo ""
+            echo "### SHA-256 Checksums"
+            echo '```text'
+            cat dist/SHA256SUMS.txt
+            echo '```'
+          } > release_notes.md
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag_name }}
+          name: "LIFE OS 365 ${{ steps.meta.outputs.tag_name }}"
+          prerelease: ${{ steps.meta.outputs.is_prerelease == 'true' }}
+          generate_release_notes: true
+          body_path: release_notes.md
+          files: |
+            dist/*

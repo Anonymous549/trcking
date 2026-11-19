@@ -1,0 +1,24 @@
+name: Feature Request
+description: Suggest an offline-first improvement or module enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem or workflow does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed offline-first solution
+    validations:
+      required: true
+  - type: checkboxes
+    id: alignment
+    attributes:
+      label: Core Principles Check
+      options:
+        - label: Works 100% offline without cloud accounts or internet permissions
+          required: true
