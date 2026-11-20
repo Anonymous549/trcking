@@ -164,7 +164,7 @@ jobs:
           } > release_notes.md
 
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.meta.outputs.tag_name }}
           name: "LIFE OS 365 ${{ steps.meta.outputs.tag_name }}"
